@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model WalletSnapshot {
+  id              String      @id @default(cuid())
+  address         String      @unique
+  chainId         Int
+  normalized      Json
+  transactionCount Int
+  uniqueContracts Int
+  activeDays      Int
+  nativeBalanceWei String
+  firstSeenAt     DateTime?
+  lastSeenAt      DateTime?
+  lastSyncedAt    DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  score           WalletScore?
+
+  @@index([chainId, address])
+  @@index([lastSyncedAt])
+}
+
+model WalletScore {
+  id               String         @id @default(cuid())
+  walletSnapshotId String         @unique
+  totalScore       Int
+  breakdown        Json
+  calculatedAt     DateTime       @default(now())
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  walletSnapshot   WalletSnapshot @relation(fields: [walletSnapshotId], references: [id], onDelete: Cascade)
+
+  @@index([totalScore])
+  @@index([calculatedAt])
+}
+
+model RuleSet {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  definition  Json
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([updatedAt])
+}
