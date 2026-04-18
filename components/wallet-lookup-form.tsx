@@ -13,7 +13,11 @@ interface WalletLookupFormProps {
 }
 
 export function WalletLookupForm({
+<<<<<<< HEAD
   placeholder = "0x…",
+=======
+  placeholder = "0x...",
+>>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
   ctaLabel = "View Score",
 }: WalletLookupFormProps) {
   const router = useRouter();
@@ -24,7 +28,11 @@ export function WalletLookupForm({
     event.preventDefault();
     const trimmed = address.trim();
     if (!isAddress(trimmed)) {
+<<<<<<< HEAD
       setError("Not a valid EVM address.");
+=======
+      setError("Enter a valid EVM wallet address.");
+>>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
       return;
     }
     setError(null);
@@ -32,6 +40,7 @@ export function WalletLookupForm({
   };
 
   return (
+<<<<<<< HEAD
     <form onSubmit={onSubmit} className="flex w-full flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input
@@ -61,6 +70,22 @@ export function WalletLookupForm({
       {error ? (
         <p className="font-mono text-xs text-destructive">{error}</p>
       ) : null}
+=======
+    <form onSubmit={onSubmit} className="flex w-full max-w-2xl flex-col gap-3">
+      <div className="flex flex-col gap-3 md:flex-row">
+        <Input
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          placeholder={placeholder}
+          className="h-11"
+          aria-label="Fluent wallet address"
+        />
+        <Button type="submit" className="h-11 min-w-36">
+          {ctaLabel}
+        </Button>
+      </div>
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+>>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
     </form>
   );
 }

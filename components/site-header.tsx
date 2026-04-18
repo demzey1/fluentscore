@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+<<<<<<< HEAD
 export function SiteHeader() {
   return (
     <header className="relative z-20 border-b border-white/8">
@@ -34,6 +35,22 @@ export function SiteHeader() {
             builder
           </Link>
         </div>
+=======
+import { Button } from "@/components/ui/button";
+
+export function SiteHeader() {
+  return (
+    <header className="border-border/70 bg-background/95 sticky top-0 z-20 border-b backdrop-blur">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+        <Link href="/" className="text-lg font-semibold tracking-tight">
+          FluentScore
+        </Link>
+        <nav className="flex items-center gap-2">
+          <Button variant="ghost" asChild>
+            <Link href="/lookup">Wallet Lookup</Link>
+          </Button>
+        </nav>
+>>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
       </div>
     </header>
   );
