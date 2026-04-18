@@ -1,8 +1,33 @@
 import { type Address, formatEther, getAddress } from "viem";
 
-import { fetchFluentWalletActivity } from "@/lib/fluent/activity";
+import {
+  getActiveDays,
+  getAddressTransactionsResult,
+  getFirstSeenTransaction,
+  getLastActivity,
+  getTransactionCount,
+  getUniqueContractsInteractedWith,
+} from "@/lib/fluent/activity";
 import { fluentTestnetChain } from "@/lib/fluent/chain";
-import { fluentPublicClient } from "@/lib/fluent/client";
+import { getNativeBalance } from "@/lib/fluent/client";
+import { type FluentExplorerTransaction } from "@/lib/fluent/explorer-client";
+
+export interface NormalizedWalletRawPayload {
+  chainId: number;
+  normalizedAt: string;
+  explorer: {
+    transactions: FluentExplorerTransaction[];
+  };
+  rpc: {
+    nativeBalanceWei: string;
+    nativeBalanceEth: string;
+  };
+  sourceHealth: {
+    explorer: "ok" | "degraded";
+    rpc: "ok" | "degraded";
+    warnings: string[];
+  };
+}
 
 export interface NormalizedWalletSnapshot {
   address: Address;
@@ -15,54 +40,103 @@ export interface NormalizedWalletSnapshot {
   lastSeenAt: string | null;
   nativeBalanceWei: string;
   nativeBalanceEth: string;
-}
-
-function toUtcDateKey(unixTimestamp: string) {
-  const asDate = new Date(Number(unixTimestamp) * 1000);
-  return asDate.toISOString().slice(0, 10);
+  rawPayload: NormalizedWalletRawPayload;
+  sourceHealth: {
+    explorer: "ok" | "degraded";
+    rpc: "ok" | "degraded";
+    warnings: string[];
+  };
 }
 
 export async function normalizeFluentWalletSnapshot(
   walletAddress: string,
 ): Promise<NormalizedWalletSnapshot> {
   const address = getAddress(walletAddress);
-  const [transactions, balanceWei] = await Promise.all([
-    fetchFluentWalletActivity(address),
-    fluentPublicClient.getBalance({ address }),
+  const [transactionsResult, balanceResult] = await Promise.allSettled([
+    getAddressTransactionsResult(address),
+    getNativeBalance(address),
   ]);
 
-  const activeDaysSet = new Set<string>();
-  const uniqueContractsSet = new Set<string>();
+  const warnings: string[] = [];
 
-  for (const tx of transactions) {
-    activeDaysSet.add(toUtcDateKey(tx.timeStamp));
-    if (tx.to) {
-      uniqueContractsSet.add(tx.to.toLowerCase());
-    }
+  const transactions =
+    transactionsResult.status === "fulfilled" && transactionsResult.value.ok
+      ? transactionsResult.value.transactions
+      : [];
+
+  if (transactionsResult.status === "fulfilled" && !transactionsResult.value.ok) {
+    warnings.push(...transactionsResult.value.warnings);
+  } else if (transactionsResult.status === "fulfilled") {
+    warnings.push(...transactionsResult.value.warnings);
+  } else {
+    warnings.push("Explorer client promise rejected.");
   }
 
-  const timestamps = transactions
-    .map((tx) => Number(tx.timeStamp))
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .sort((a, b) => a - b);
+  const balanceWei =
+    balanceResult.status === "fulfilled" && balanceResult.value.ok
+      ? balanceResult.value.data
+      : BigInt(0);
 
-  const firstSeenAt = timestamps.length
-    ? new Date(timestamps[0] * 1000).toISOString()
+  if (balanceResult.status === "fulfilled" && !balanceResult.value.ok) {
+    warnings.push(balanceResult.value.error);
+  } else if (balanceResult.status === "rejected") {
+    warnings.push("RPC balance promise rejected.");
+  }
+
+  const [transactionCount, uniqueContracts, activeDays, firstSeenTransaction, lastActivity] =
+    await Promise.all([
+      getTransactionCount(address, transactions),
+      getUniqueContractsInteractedWith(address, transactions),
+      getActiveDays(address, transactions),
+      getFirstSeenTransaction(address, transactions),
+      getLastActivity(address, transactions),
+    ]);
+
+  const sourceHealth = {
+    explorer:
+      transactionsResult.status === "fulfilled" && transactionsResult.value.ok
+        ? "ok"
+        : "degraded",
+    rpc: balanceResult.status === "fulfilled" && balanceResult.value.ok ? "ok" : "degraded",
+    warnings,
+  } as const;
+
+  const firstSeenAt = firstSeenTransaction
+    ? new Date(Number(firstSeenTransaction.timeStamp) * 1000).toISOString()
     : null;
-  const lastSeenAt = timestamps.length
-    ? new Date(timestamps[timestamps.length - 1] * 1000).toISOString()
-    : null;
+  const lastSeenAt = lastActivity ? lastActivity.toISOString() : null;
+
+  if (sourceHealth.explorer === "degraded" || sourceHealth.rpc === "degraded") {
+    console.warn(
+      `[fluent][snapshot] Degraded data collection for ${address}: ${sourceHealth.warnings.join(
+        " ",
+      )}`,
+    );
+  }
 
   return {
     address,
     chainId: fluentTestnetChain.id,
     fetchedAt: new Date().toISOString(),
-    transactionCount: transactions.length,
-    uniqueContracts: uniqueContractsSet.size,
-    activeDays: activeDaysSet.size,
+    transactionCount,
+    uniqueContracts: uniqueContracts.length,
+    activeDays,
     firstSeenAt,
     lastSeenAt,
     nativeBalanceWei: balanceWei.toString(),
     nativeBalanceEth: formatEther(balanceWei),
+    rawPayload: {
+      chainId: fluentTestnetChain.id,
+      normalizedAt: new Date().toISOString(),
+      explorer: {
+        transactions,
+      },
+      rpc: {
+        nativeBalanceWei: balanceWei.toString(),
+        nativeBalanceEth: formatEther(balanceWei),
+      },
+      sourceHealth,
+    },
+    sourceHealth,
   };
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import {
   buildErrorPayload,
-  executeScoreFlow,
+  getWalletSnapshotPayload,
   parseAddressParam,
   parseScoreQuery,
 } from "@/lib/api/fluentscore-phase1";
@@ -20,15 +20,14 @@ export async function GET(request: Request, { params }: RouteContext) {
     const requestUrl = new URL(request.url);
     const query = parseScoreQuery(requestUrl.searchParams);
 
-    const scorePayload = await executeScoreFlow({
+    const walletPayload = await getWalletSnapshotPayload({
       address: parsedAddress,
-      refresh: query.refresh,
       maxAgeMinutes: query.maxAgeMinutes,
     });
 
     return NextResponse.json(
       {
-        data: scorePayload,
+        data: walletPayload,
         timestamp: new Date().toISOString(),
       },
       { status: 200 },

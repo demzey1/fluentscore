@@ -1,34 +1,53 @@
 import { type NormalizedWalletSnapshot } from "@/lib/fluent/wallet";
+import { scoreWallet } from "@/lib/scoring/engine";
 import type { WalletScoreResult } from "@/lib/scoring/types";
 
-function clampScore(value: number, max: number) {
-  return Math.max(0, Math.min(max, value));
+function getWalletDataState(snapshot: NormalizedWalletSnapshot): WalletScoreResult["dataState"] {
+  if (snapshot.sourceHealth.explorer === "degraded" && snapshot.transactionCount === 0) {
+    return "explorer_unavailable";
+  }
+
+  if (snapshot.transactionCount === 0) {
+    return "no_fluent_activity";
+  }
+
+  const isSparseSignal =
+    snapshot.transactionCount <= 3 &&
+    snapshot.activeDays <= 2 &&
+    snapshot.uniqueContracts <= 1;
+
+  if (isSparseSignal) {
+    return "testnet_sparse";
+  }
+
+  return "ok";
 }
 
 export function computeFluentWalletScore(
   snapshot: NormalizedWalletSnapshot,
 ): WalletScoreResult {
-  const activity = clampScore(snapshot.transactionCount * 2, 40);
-  const diversity = clampScore(snapshot.uniqueContracts * 4, 25);
-  const consistency = clampScore(snapshot.activeDays * 2, 20);
-
-  const balanceAsFloat = Number(snapshot.nativeBalanceEth);
-  const balance = Number.isFinite(balanceAsFloat)
-    ? clampScore(Math.floor(balanceAsFloat * 15), 15)
-    : 0;
-
-  const totalScore = clampScore(activity + diversity + consistency + balance, 100);
+  const computedScore = scoreWallet({
+    totalTransactions: snapshot.transactionCount,
+    uniqueContracts: snapshot.uniqueContracts,
+    activeDays: snapshot.activeDays,
+    firstTransactionAt: snapshot.firstSeenAt,
+    lastActivityAt: snapshot.lastSeenAt,
+  });
 
   return {
     address: snapshot.address,
     chainId: snapshot.chainId,
-    totalScore,
+    totalScore: computedScore.totalScore,
+    queriedAt: snapshot.fetchedAt,
+    dataState: getWalletDataState(snapshot),
+    sourceHealth: snapshot.sourceHealth,
     breakdown: {
-      activity,
-      diversity,
-      consistency,
-      balance,
+      activity: computedScore.transactionActivityScore,
+      diversity: computedScore.contractDiversityScore,
+      consistency: computedScore.consistencyScore,
     },
+    summaryLabel: computedScore.summaryLabel,
+    reasons: computedScore.reasons,
     metrics: {
       transactionCount: snapshot.transactionCount,
       uniqueContracts: snapshot.uniqueContracts,

@@ -7,49 +7,106 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model WalletSnapshot {
-  id              String      @id @default(cuid())
-  address         String      @unique
-  chainId         Int
-  normalized      Json
-  transactionCount Int
-  uniqueContracts Int
-  activeDays      Int
-  nativeBalanceWei String
-  firstSeenAt     DateTime?
-  lastSeenAt      DateTime?
-  lastSyncedAt    DateTime    @default(now())
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  score           WalletScore?
+model WalletProfile {
+  id         String           @id @default(cuid())
+  address    String           @unique
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+  snapshots  WalletSnapshot[]
+  scores     WalletScore[]
 
-  @@index([chainId, address])
-  @@index([lastSyncedAt])
+  @@index([address])
+  @@map("wallet_profiles")
+}
+
+model WalletSnapshot {
+  id             String        @id @default(cuid())
+  walletProfileId String       @map("wallet_profile_id")
+  walletProfile  WalletProfile @relation(fields: [walletProfileId], references: [id], onDelete: Cascade)
+  firstSeenAt    DateTime?     @map("first_seen_at")
+  lastActivityAt DateTime?     @map("last_activity_at")
+  txCount        Int           @map("tx_count")
+  activeDays     Int           @map("active_days")
+  uniqueContracts Int          @map("unique_contracts")
+  rawPayload     Json          @map("raw_payload")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  score          WalletScore?
+
+  @@index([walletProfileId, createdAt])
+  @@map("wallet_snapshots")
 }
 
 model WalletScore {
-  id               String         @id @default(cuid())
-  walletSnapshotId String         @unique
-  totalScore       Int
-  breakdown        Json
-  calculatedAt     DateTime       @default(now())
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-  walletSnapshot   WalletSnapshot @relation(fields: [walletSnapshotId], references: [id], onDelete: Cascade)
+  id                        String         @id @default(cuid())
+  walletProfileId           String         @map("wallet_profile_id")
+  walletProfile             WalletProfile  @relation(fields: [walletProfileId], references: [id], onDelete: Cascade)
+  snapshotId                String         @unique @map("snapshot_id")
+  snapshot                  WalletSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  transactionActivityScore  Int            @map("transaction_activity_score")
+  contractDiversityScore    Int            @map("contract_diversity_score")
+  consistencyScore          Int            @map("consistency_score")
+  totalScore                Int            @map("total_score")
+  summaryLabel              String         @map("summary_label")
+  reasonsJson               Json           @map("reasons_json")
+  createdAt                 DateTime       @default(now()) @map("created_at")
 
+  @@index([walletProfileId, createdAt])
   @@index([totalScore])
-  @@index([calculatedAt])
+  @@map("wallet_scores")
+}
+
+enum RuleConditionType {
+  MIN_TRANSACTION_COUNT
+  MIN_UNIQUE_CONTRACTS
+  MIN_ACTIVE_DAYS
+  FIRST_TRANSACTION_OLDER_THAN_DAYS
+  MIN_TRANSACTION_ACTIVITY_SCORE
+  MIN_CONTRACT_DIVERSITY_SCORE
+  MIN_CONSISTENCY_SCORE
+  MIN_TOTAL_SCORE
 }
 
 model RuleSet {
-  id          String   @id @default(cuid())
+  id          String           @id @default(cuid())
   name        String
   description String?
-  definition  Json
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive    Boolean          @default(true) @map("is_active")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  conditions  RuleCondition[]
+  evaluations RuleEvaluation[]
 
-  @@index([isActive])
-  @@index([updatedAt])
+  @@index([isActive, updatedAt])
+  @@map("rule_sets")
+}
+
+model RuleCondition {
+  id         String            @id @default(cuid())
+  ruleSetId  String            @map("rule_set_id")
+  ruleSet    RuleSet           @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+  type       RuleConditionType
+  threshold  Int
+  sortOrder  Int               @default(0) @map("sort_order")
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  @@index([ruleSetId, sortOrder])
+  @@map("rule_conditions")
+}
+
+model RuleEvaluation {
+  id               String    @id @default(cuid())
+  ruleSetId        String    @map("rule_set_id")
+  ruleSet          RuleSet   @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+  walletAddress    String    @map("wallet_address")
+  passed           Boolean
+  passedConditions Json      @map("passed_conditions")
+  failedConditions Json      @map("failed_conditions")
+  explanations     Json
+  scoreSnapshot    Json      @map("score_snapshot")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([ruleSetId, createdAt])
+  @@index([walletAddress, createdAt])
+  @@map("rule_evaluations")
 }

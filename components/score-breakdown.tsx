@@ -1,34 +1,13 @@
 import type { WalletScoreResult } from "@/lib/scoring/types";
 
-<<<<<<< HEAD
-=======
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-
->>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
 interface ScoreBreakdownProps {
   score: WalletScoreResult;
 }
 
-<<<<<<< HEAD
 function ScoreBar({ value, max }: { value: number; max: number }) {
   const pct = Math.round((value / max) * 100);
   return (
-    <div className="h-[3px] w-full rounded-full bg-white/8 overflow-hidden">
+    <div className="h-[3px] w-full overflow-hidden rounded-full bg-white/8">
       <div
         className="h-full rounded-full transition-all"
         style={{
@@ -40,62 +19,92 @@ function ScoreBar({ value, max }: { value: number; max: number }) {
   );
 }
 
+function getDataStateMessage(score: WalletScoreResult) {
+  if (score.dataState === "explorer_unavailable") {
+    return "Fluent explorer is currently unavailable. Results may be incomplete.";
+  }
+
+  if (score.dataState === "no_fluent_activity") {
+    return "No Fluent on-chain activity was found for this address yet.";
+  }
+
+  if (score.dataState === "testnet_sparse") {
+    return "Sparse Testnet activity detected. This can happen with fresh or reset environments.";
+  }
+
+  return null;
+}
+
 export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
   const calculatedDate = new Date(score.calculatedAt);
+  const queriedDate = new Date(score.queriedAt);
+  const dataStateMessage = getDataStateMessage(score);
 
   return (
     <div className="flex flex-col gap-6">
-
-      {/* Score header */}
-      <div className="flex flex-col gap-1 border-b border-white/8 pb-6">
+      <div className="border-b border-white/8 pb-6">
         <div className="flex items-end gap-4">
           <span
-            className="text-6xl font-semibold tabular-nums leading-none"
+            className="text-6xl leading-none font-semibold tabular-nums"
             style={{ color: "oklch(0.65 0.14 165)" }}
           >
             {score.totalScore}
           </span>
-          <span className="mb-1.5 font-mono text-sm text-muted-foreground">
-            / 100
-          </span>
+          <span className="text-muted-foreground mb-1.5 font-mono text-sm">/ 100</span>
         </div>
-        <p className="font-mono text-xs text-muted-foreground">
+        <p className="text-muted-foreground font-mono text-xs">
           computed{" "}
           {calculatedDate.toLocaleString("en-US", {
             dateStyle: "medium",
             timeStyle: "short",
           })}{" "}
-          · chain {score.chainId}
+          - chain {score.chainId}
+        </p>
+        <p className="text-muted-foreground mt-1 font-mono text-xs">
+          queried{" "}
+          {queriedDate.toLocaleString("en-US", {
+            dateStyle: "medium",
+            timeStyle: "short",
+          })}
         </p>
       </div>
 
-      {/* Metrics grid — 3 columns, no balance */}
+      <div className="bg-card rounded-md border border-white/8 px-5 py-4">
+        <p className="text-foreground text-sm font-medium">{score.summaryLabel}</p>
+        <p className="text-muted-foreground mt-1 text-xs leading-relaxed">{score.reasons[0]}</p>
+      </div>
+
+      {dataStateMessage ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-xs text-amber-200">{dataStateMessage}</p>
+        </div>
+      ) : null}
+
       <div>
-        <h2 className="mb-4 font-mono text-xs tracking-widest uppercase text-muted-foreground">
+        <h2 className="text-muted-foreground mb-4 font-mono text-xs tracking-widest uppercase">
           Wallet metrics
         </h2>
-        <div className="grid grid-cols-3 gap-px border border-white/8 rounded-md overflow-hidden">
+        <div className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-white/8">
           {[
             { label: "Transactions", value: score.metrics.transactionCount },
             { label: "Unique contracts", value: score.metrics.uniqueContracts },
             { label: "Active days", value: score.metrics.activeDays },
-          ].map((m) => (
-            <div key={m.label} className="flex flex-col gap-1 bg-card px-5 py-4">
-              <span className="font-mono text-xl font-medium tabular-nums text-foreground">
-                {m.value}
+          ].map((metric) => (
+            <div key={metric.label} className="bg-card flex flex-col gap-1 px-5 py-4">
+              <span className="text-foreground font-mono text-xl font-medium tabular-nums">
+                {metric.value}
               </span>
-              <span className="text-xs text-muted-foreground">{m.label}</span>
+              <span className="text-muted-foreground text-xs">{metric.label}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Score breakdown — no weight labels, no native balance */}
       <div>
-        <h2 className="mb-4 font-mono text-xs tracking-widest uppercase text-muted-foreground">
+        <h2 className="text-muted-foreground mb-4 font-mono text-xs tracking-widest uppercase">
           Score breakdown
         </h2>
-        <div className="flex flex-col gap-4 rounded-md border border-white/8 bg-card px-5 py-5">
+        <div className="bg-card flex flex-col gap-4 rounded-md border border-white/8 px-5 py-5">
           {[
             {
               label: "Transaction activity",
@@ -121,60 +130,10 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
         </div>
       </div>
 
-      {/* Provenance */}
-      <p className="text-xs text-muted-foreground">
-        Data sourced from Fluent Testnet RPC and Fluentscan indexing. Score
-        reflects on-chain activity only — no off-chain signals are included.
+      <p className="text-muted-foreground text-xs">
+        Data sourced from Fluent Testnet RPC and Fluentscan indexing. Score reflects
+        on-chain activity only - no off-chain signals are included.
       </p>
     </div>
-=======
-export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
-  return (
-    <Card>
-      <CardHeader className="gap-2">
-        <CardTitle className="flex items-center justify-between gap-3">
-          <span>Fluent Wallet Score</span>
-          <Badge variant="secondary">Score: {score.totalScore}/100</Badge>
-        </CardTitle>
-        <CardDescription>
-          Calculated at {new Date(score.calculatedAt).toLocaleString()} on chain{" "}
-          {score.chainId}.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Metric</TableHead>
-              <TableHead>Value</TableHead>
-              <TableHead>Score Contribution</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow>
-              <TableCell>Transactions</TableCell>
-              <TableCell>{score.metrics.transactionCount}</TableCell>
-              <TableCell>{score.breakdown.activity}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Unique Contracts</TableCell>
-              <TableCell>{score.metrics.uniqueContracts}</TableCell>
-              <TableCell>{score.breakdown.diversity}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Active Days</TableCell>
-              <TableCell>{score.metrics.activeDays}</TableCell>
-              <TableCell>{score.breakdown.consistency}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Native Balance (ETH)</TableCell>
-              <TableCell>{Number(score.metrics.nativeBalanceEth).toFixed(6)}</TableCell>
-              <TableCell>{score.breakdown.balance}</TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
->>>>>>> 1027c6cb2035fb5a23c6ae5ffc1b1eeb07b835a9
   );
 }

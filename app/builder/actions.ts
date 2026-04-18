@@ -7,7 +7,8 @@ import { z } from "zod";
 import { requireBuilderSession } from "@/lib/auth/builder-session";
 import {
   createRuleSet,
-  parseRuleDefinitionJson,
+  deleteRuleSet,
+  parseRuleConditionsForInput,
   updateRuleSet,
 } from "@/lib/db/rules";
 import { mutableRuleSetInputSchema } from "@/lib/rules/schema";
@@ -21,7 +22,7 @@ function parseRuleSetInput(formData: FormData, includeId: boolean) {
     id: includeId ? getTextField(formData, "id") : undefined,
     name: getTextField(formData, "name"),
     description: getTextField(formData, "description"),
-    definition: getTextField(formData, "definition"),
+    conditionsJson: getTextField(formData, "conditionsJson"),
     isActive: formData.get("isActive") === "on",
   };
 
@@ -43,12 +44,12 @@ export async function createRuleSetAction(formData: FormData) {
 
   try {
     const input = parseRuleSetInput(formData, false);
-    const definition = parseRuleDefinitionJson(input.definition);
+    const conditions = parseRuleConditionsForInput(input.conditionsJson);
 
     await createRuleSet({
       name: input.name,
       description: input.description || undefined,
-      definition,
+      conditions,
       isActive: input.isActive,
     });
   } catch (error) {
@@ -66,12 +67,12 @@ export async function updateRuleSetAction(formData: FormData) {
 
   try {
     const input = parseRuleSetInput(formData, true);
-    const definition = parseRuleDefinitionJson(input.definition);
+    const conditions = parseRuleConditionsForInput(input.conditionsJson);
     await updateRuleSet({
       id: input.id!,
       name: input.name,
       description: input.description || undefined,
-      definition,
+      conditions,
       isActive: input.isActive,
     });
   } catch (error) {
@@ -82,4 +83,20 @@ export async function updateRuleSetAction(formData: FormData) {
 
   revalidatePath("/builder");
   redirect("/builder?status=success&message=Rule+set+updated");
+}
+
+export async function deleteRuleSetAction(formData: FormData) {
+  await requireBuilderSession();
+
+  try {
+    const ruleSetId = z.string().cuid().parse(getTextField(formData, "id"));
+    await deleteRuleSet(ruleSetId);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unable to delete rule set.";
+    redirect(toRedirectError(message));
+  }
+
+  revalidatePath("/builder");
+  redirect("/builder?status=success&message=Rule+set+deleted");
 }

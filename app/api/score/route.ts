@@ -3,27 +3,16 @@ import { NextResponse } from "next/server";
 import {
   buildErrorPayload,
   executeScoreFlow,
-  parseAddressParam,
-  parseScoreQuery,
+  parsePostScoreBody,
 } from "@/lib/api/fluentscore-phase1";
 
-interface RouteContext {
-  params: Promise<{
-    address: string;
-  }>;
-}
-
-export async function GET(request: Request, { params }: RouteContext) {
+export async function POST(request: Request) {
   try {
-    const { address } = await params;
-    const parsedAddress = parseAddressParam(address);
-    const requestUrl = new URL(request.url);
-    const query = parseScoreQuery(requestUrl.searchParams);
-
+    const body = await parsePostScoreBody(request);
     const scorePayload = await executeScoreFlow({
-      address: parsedAddress,
-      refresh: query.refresh,
-      maxAgeMinutes: query.maxAgeMinutes,
+      address: body.address,
+      refresh: body.refresh,
+      maxAgeMinutes: body.maxAgeMinutes,
     });
 
     return NextResponse.json(
