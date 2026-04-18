@@ -1,9 +1,35 @@
 import type { Prisma } from "@prisma/client";
 import type { Address } from "viem";
+import { z } from "zod";
 
 import { prisma } from "@/lib/db/client";
+import { DEFAULT_FLUENT_CONFIG } from "@/lib/env";
 import type { NormalizedWalletSnapshot } from "@/lib/fluent/wallet";
 import type { WalletScoreResult } from "@/lib/scoring/types";
+
+const reasonsJsonSchema = z
+  .object({
+    queriedAt: z.string().optional(),
+    calculatedAt: z.string().optional(),
+    reasons: z.array(z.string()).optional(),
+    dataState: z
+      .enum(["ok", "no_fluent_activity", "partial_data", "data_unavailable"])
+      .optional(),
+    sourceHealth: z
+      .object({
+        explorer: z.enum(["ok", "degraded"]),
+        rpc: z.enum(["ok", "degraded"]),
+        warnings: z.array(z.string()),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+const rawPayloadSchema = z
+  .object({
+    source: z.enum(["explorer", "rpc_fallback"]).optional(),
+  })
+  .passthrough();
 
 export interface CachedWalletSnapshotScore {
   walletProfile: {
@@ -37,30 +63,89 @@ export interface CachedWalletSnapshotScore {
   };
 }
 
-function buildReasonsJson(
-  score: WalletScoreResult,
-  snapshot: NormalizedWalletSnapshot,
-): Prisma.JsonObject {
+function buildReasonsJson(score: WalletScoreResult): Prisma.JsonObject {
   return {
-    chainId: score.chainId,
-    calculatedAt: score.calculatedAt,
     queriedAt: score.queriedAt,
-    dataState: score.dataState,
-    summaryLabel: score.summaryLabel,
+    calculatedAt: score.calculatedAt,
     reasons: score.reasons,
+    dataState: score.dataState,
+    sourceHealth: score.sourceHealth,
+    firstTxTimestamp: score.firstTxTimestamp,
+    lastTxTimestamp: score.lastTxTimestamp,
+  };
+}
+
+export function hydrateWalletScoreResultFromRecord(input: {
+  address: Address;
+  walletSnapshot: CachedWalletSnapshotScore["walletSnapshot"];
+  walletScore: CachedWalletSnapshotScore["walletScore"];
+}): WalletScoreResult {
+  const parsedReasons = reasonsJsonSchema.safeParse(input.walletScore.reasonsJson);
+  const parsedRawPayload = rawPayloadSchema.safeParse(input.walletSnapshot.rawPayload);
+
+  const queriedAt =
+    parsedReasons.success && parsedReasons.data.queriedAt
+      ? parsedReasons.data.queriedAt
+      : input.walletSnapshot.createdAt.toISOString();
+
+  const calculatedAt =
+    parsedReasons.success && parsedReasons.data.calculatedAt
+      ? parsedReasons.data.calculatedAt
+      : input.walletScore.createdAt.toISOString();
+
+  const reasons =
+    parsedReasons.success && parsedReasons.data.reasons
+      ? parsedReasons.data.reasons
+      : [`Total FluentScore is ${input.walletScore.totalScore}/85.`];
+
+  const dataState =
+    parsedReasons.success && parsedReasons.data.dataState
+      ? parsedReasons.data.dataState
+      : input.walletSnapshot.txCount === 0
+        ? "no_fluent_activity"
+        : "ok";
+
+  const sourceHealth =
+    parsedReasons.success && parsedReasons.data.sourceHealth
+      ? parsedReasons.data.sourceHealth
+      : {
+          explorer:
+            parsedRawPayload.success && parsedRawPayload.data.source === "rpc_fallback"
+              ? ("degraded" as const)
+              : ("ok" as const),
+          rpc: "ok" as const,
+          warnings:
+            parsedRawPayload.success && parsedRawPayload.data.source === "rpc_fallback"
+              ? ["Explorer unavailable. Snapshot derived from RPC fallback data."]
+              : [],
+        };
+
+  return {
+    address: input.address,
+    chainId: DEFAULT_FLUENT_CONFIG.chainId,
+    totalScore: input.walletScore.totalScore,
     breakdown: {
-      activity: score.breakdown.activity,
-      diversity: score.breakdown.diversity,
-      consistency: score.breakdown.consistency,
+      activity: input.walletScore.transactionActivityScore,
+      diversity: input.walletScore.contractDiversityScore,
+      consistency: input.walletScore.consistencyScore,
     },
+    summaryLabel: input.walletScore.summaryLabel as WalletScoreResult["summaryLabel"],
+    reasons,
+    queriedAt,
+    dataState,
+    sourceHealth,
     metrics: {
-      transactionCount: score.metrics.transactionCount,
-      uniqueContracts: score.metrics.uniqueContracts,
-      activeDays: score.metrics.activeDays,
-      nativeBalanceWei: score.metrics.nativeBalanceWei,
-      nativeBalanceEth: score.metrics.nativeBalanceEth,
+      transactionCount: input.walletSnapshot.txCount,
+      uniqueContracts: input.walletSnapshot.uniqueContracts,
+      activeDays: input.walletSnapshot.activeDays,
     },
-    sourceHealth: snapshot.sourceHealth,
+    firstTxTimestamp: input.walletSnapshot.firstSeenAt
+      ? input.walletSnapshot.firstSeenAt.toISOString()
+      : null,
+    lastTxTimestamp: input.walletSnapshot.lastActivityAt
+      ? input.walletSnapshot.lastActivityAt.toISOString()
+      : null,
+    calculatedAt,
   };
 }
 
@@ -129,12 +214,42 @@ export async function getWalletProfileWithLatestSnapshot(address: Address) {
   });
 }
 
+export async function listRecentScoredWallets(limit = 200) {
+  return prisma.walletScore.findMany({
+    orderBy: {
+      createdAt: "desc",
+    },
+    take: limit,
+    include: {
+      walletProfile: true,
+      snapshot: true,
+    },
+  });
+}
+
 export async function persistWalletSnapshotAndScore(
   snapshot: NormalizedWalletSnapshot,
   score: WalletScoreResult,
 ) {
+  const activityScore = score.breakdown.activity;
+  const diversityScore = score.breakdown.diversity;
+  const consistencyScore = score.breakdown.consistency;
+  const totalScore = score.totalScore;
+
+  if (
+    totalScore === null ||
+    activityScore === null ||
+    diversityScore === null ||
+    consistencyScore === null ||
+    score.metrics.transactionCount === null ||
+    score.metrics.uniqueContracts === null ||
+    score.metrics.activeDays === null
+  ) {
+    throw new Error("Cannot persist incomplete wallet score.");
+  }
+
   const normalizedAddress = snapshot.address.toLowerCase();
-  const reasonsJson = buildReasonsJson(score, snapshot);
+  const reasonsJson = buildReasonsJson(score);
 
   return prisma.$transaction(async (tx) => {
     const walletProfile = await tx.walletProfile.upsert({
@@ -146,12 +261,12 @@ export async function persistWalletSnapshotAndScore(
     const walletSnapshot = await tx.walletSnapshot.create({
       data: {
         walletProfileId: walletProfile.id,
-        firstSeenAt: snapshot.firstSeenAt ? new Date(snapshot.firstSeenAt) : null,
-        lastActivityAt: snapshot.lastSeenAt ? new Date(snapshot.lastSeenAt) : null,
+        firstSeenAt: snapshot.firstTxTimestamp ? new Date(snapshot.firstTxTimestamp) : null,
+        lastActivityAt: snapshot.lastTxTimestamp ? new Date(snapshot.lastTxTimestamp) : null,
         txCount: snapshot.transactionCount,
-        activeDays: snapshot.activeDays,
-        uniqueContracts: snapshot.uniqueContracts,
-        rawPayload: snapshot.rawPayload as unknown as Prisma.JsonObject,
+        activeDays: snapshot.activeDays ?? 0,
+        uniqueContracts: snapshot.uniqueContracts ?? 0,
+        rawPayload: snapshot.rawPayload as Prisma.JsonObject,
       },
     });
 
@@ -159,10 +274,10 @@ export async function persistWalletSnapshotAndScore(
       data: {
         walletProfileId: walletProfile.id,
         snapshotId: walletSnapshot.id,
-        transactionActivityScore: score.breakdown.activity,
-        contractDiversityScore: score.breakdown.diversity,
-        consistencyScore: score.breakdown.consistency,
-        totalScore: score.totalScore,
+        transactionActivityScore: activityScore,
+        contractDiversityScore: diversityScore,
+        consistencyScore,
+        totalScore,
         summaryLabel: score.summaryLabel,
         reasonsJson,
       },

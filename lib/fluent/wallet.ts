@@ -1,31 +1,93 @@
-import { type Address, formatEther, getAddress } from "viem";
+import { type Address } from "viem";
 
+import { DataUnavailableError, ExplorerError } from "@/lib/errors";
 import {
-  getActiveDays,
-  getAddressTransactionsResult,
-  getFirstSeenTransaction,
-  getLastActivity,
-  getTransactionCount,
-  getUniqueContractsInteractedWith,
-} from "@/lib/fluent/activity";
-import { fluentTestnetChain } from "@/lib/fluent/chain";
-import { getNativeBalance } from "@/lib/fluent/client";
-import { type FluentExplorerTransaction } from "@/lib/fluent/explorer-client";
+  getAddressTransactions,
+  type ExplorerAddressTransactions,
+} from "@/lib/fluent/explorer-client";
+import { fluentClient, fluentTestnetChain } from "@/lib/fluent/client";
+import type { ExplorerTransaction } from "@/lib/fluent/schemas";
 
-export interface NormalizedWalletRawPayload {
-  chainId: number;
-  normalizedAt: string;
-  explorer: {
-    transactions: FluentExplorerTransaction[];
-  };
-  rpc: {
-    nativeBalanceWei: string;
-    nativeBalanceEth: string;
-  };
-  sourceHealth: {
-    explorer: "ok" | "degraded";
-    rpc: "ok" | "degraded";
-    warnings: string[];
+const RPC_FALLBACK_TIMEOUT_MS = 8_000;
+
+type SnapshotState = "ok" | "no_fluent_activity" | "partial_data";
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, timeoutMessage: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new DataUnavailableError(timeoutMessage));
+    }, timeoutMs);
+
+    operation
+      .then((value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+}
+
+function toIsoFromUnix(timestamp: string) {
+  const parsed = Number(timestamp);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return new Date(parsed * 1000).toISOString();
+}
+
+function uniqueContractCount(transactions: ExplorerTransaction[]) {
+  const uniqueContracts = new Set<string>();
+
+  for (const tx of transactions) {
+    if (tx.contractAddress && tx.contractAddress !== "0x") {
+      uniqueContracts.add(tx.contractAddress.toLowerCase());
+      continue;
+    }
+
+    const hasContractCallData =
+      typeof tx.input === "string" && tx.input.length > 2 && tx.input !== "0x";
+    if (hasContractCallData && tx.to && tx.to.startsWith("0x")) {
+      uniqueContracts.add(tx.to.toLowerCase());
+    }
+  }
+
+  return uniqueContracts.size;
+}
+
+function activeDaysCount(transactions: ExplorerTransaction[]) {
+  const uniqueDays = new Set<string>();
+
+  for (const tx of transactions) {
+    const iso = toIsoFromUnix(tx.timeStamp);
+    if (!iso) continue;
+    uniqueDays.add(iso.slice(0, 10));
+  }
+
+  return uniqueDays.size;
+}
+
+function buildNoActivitySnapshot(
+  address: Address,
+  source: "explorer" | "rpc_fallback",
+): NormalizedWalletSnapshot {
+  return {
+    address,
+    chainId: fluentTestnetChain.id,
+    fetchedAt: new Date().toISOString(),
+    transactionCount: 0,
+    uniqueContracts: 0,
+    activeDays: 0,
+    firstTxTimestamp: null,
+    lastTxTimestamp: null,
+    dataState: "no_fluent_activity",
+    source,
+    rawPayload: {
+      source,
+      reason: "no_fluent_activity",
+    },
   };
 }
 
@@ -34,109 +96,89 @@ export interface NormalizedWalletSnapshot {
   chainId: number;
   fetchedAt: string;
   transactionCount: number;
-  uniqueContracts: number;
-  activeDays: number;
-  firstSeenAt: string | null;
-  lastSeenAt: string | null;
-  nativeBalanceWei: string;
-  nativeBalanceEth: string;
-  rawPayload: NormalizedWalletRawPayload;
-  sourceHealth: {
-    explorer: "ok" | "degraded";
-    rpc: "ok" | "degraded";
-    warnings: string[];
+  uniqueContracts: number | null;
+  activeDays: number | null;
+  firstTxTimestamp: string | null;
+  lastTxTimestamp: string | null;
+  dataState: SnapshotState;
+  source: "explorer" | "rpc_fallback";
+  rawPayload: Record<string, unknown>;
+}
+
+async function fromExplorer(
+  address: Address,
+  txPayload: ExplorerAddressTransactions,
+): Promise<NormalizedWalletSnapshot> {
+  if (txPayload.noActivity || txPayload.transactions.length === 0) {
+    return buildNoActivitySnapshot(address, "explorer");
+  }
+
+  const firstTx = txPayload.transactions[0];
+  const lastTx = txPayload.transactions[txPayload.transactions.length - 1];
+
+  return {
+    address,
+    chainId: fluentTestnetChain.id,
+    fetchedAt: new Date().toISOString(),
+    transactionCount: txPayload.transactions.length,
+    uniqueContracts: uniqueContractCount(txPayload.transactions),
+    activeDays: activeDaysCount(txPayload.transactions),
+    firstTxTimestamp: toIsoFromUnix(firstTx.timeStamp),
+    lastTxTimestamp: toIsoFromUnix(lastTx.timeStamp),
+    dataState: "ok",
+    source: "explorer",
+    rawPayload: {
+      source: "explorer",
+      transactions: txPayload.transactions,
+    },
   };
 }
 
-export async function normalizeFluentWalletSnapshot(
-  walletAddress: string,
-): Promise<NormalizedWalletSnapshot> {
-  const address = getAddress(walletAddress);
-  const [transactionsResult, balanceResult] = await Promise.allSettled([
-    getAddressTransactionsResult(address),
-    getNativeBalance(address),
-  ]);
-
-  const warnings: string[] = [];
-
-  const transactions =
-    transactionsResult.status === "fulfilled" && transactionsResult.value.ok
-      ? transactionsResult.value.transactions
-      : [];
-
-  if (transactionsResult.status === "fulfilled" && !transactionsResult.value.ok) {
-    warnings.push(...transactionsResult.value.warnings);
-  } else if (transactionsResult.status === "fulfilled") {
-    warnings.push(...transactionsResult.value.warnings);
-  } else {
-    warnings.push("Explorer client promise rejected.");
-  }
-
-  const balanceWei =
-    balanceResult.status === "fulfilled" && balanceResult.value.ok
-      ? balanceResult.value.data
-      : BigInt(0);
-
-  if (balanceResult.status === "fulfilled" && !balanceResult.value.ok) {
-    warnings.push(balanceResult.value.error);
-  } else if (balanceResult.status === "rejected") {
-    warnings.push("RPC balance promise rejected.");
-  }
-
-  const [transactionCount, uniqueContracts, activeDays, firstSeenTransaction, lastActivity] =
-    await Promise.all([
-      getTransactionCount(address, transactions),
-      getUniqueContractsInteractedWith(address, transactions),
-      getActiveDays(address, transactions),
-      getFirstSeenTransaction(address, transactions),
-      getLastActivity(address, transactions),
-    ]);
-
-  const sourceHealth = {
-    explorer:
-      transactionsResult.status === "fulfilled" && transactionsResult.value.ok
-        ? "ok"
-        : "degraded",
-    rpc: balanceResult.status === "fulfilled" && balanceResult.value.ok ? "ok" : "degraded",
-    warnings,
-  } as const;
-
-  const firstSeenAt = firstSeenTransaction
-    ? new Date(Number(firstSeenTransaction.timeStamp) * 1000).toISOString()
-    : null;
-  const lastSeenAt = lastActivity ? lastActivity.toISOString() : null;
-
-  if (sourceHealth.explorer === "degraded" || sourceHealth.rpc === "degraded") {
-    console.warn(
-      `[fluent][snapshot] Degraded data collection for ${address}: ${sourceHealth.warnings.join(
-        " ",
-      )}`,
+async function fromRpcFallback(address: Address): Promise<NormalizedWalletSnapshot> {
+  let txCount: number;
+  try {
+    txCount = await withTimeout(
+      fluentClient.getTransactionCount({ address }),
+      RPC_FALLBACK_TIMEOUT_MS,
+      "RPC fallback timed out.",
     );
+  } catch {
+    throw new DataUnavailableError("Explorer and RPC sources are unavailable.");
+  }
+
+  if (!Number.isFinite(txCount) || txCount <= 0) {
+    return buildNoActivitySnapshot(address, "rpc_fallback");
   }
 
   return {
     address,
     chainId: fluentTestnetChain.id,
     fetchedAt: new Date().toISOString(),
-    transactionCount,
-    uniqueContracts: uniqueContracts.length,
-    activeDays,
-    firstSeenAt,
-    lastSeenAt,
-    nativeBalanceWei: balanceWei.toString(),
-    nativeBalanceEth: formatEther(balanceWei),
+    transactionCount: txCount,
+    uniqueContracts: null,
+    activeDays: null,
+    firstTxTimestamp: null,
+    lastTxTimestamp: null,
+    dataState: "partial_data",
+    source: "rpc_fallback",
     rawPayload: {
-      chainId: fluentTestnetChain.id,
-      normalizedAt: new Date().toISOString(),
-      explorer: {
-        transactions,
-      },
-      rpc: {
-        nativeBalanceWei: balanceWei.toString(),
-        nativeBalanceEth: formatEther(balanceWei),
-      },
-      sourceHealth,
+      source: "rpc_fallback",
+      transactionCount: String(txCount),
+      reason: "explorer_unavailable",
     },
-    sourceHealth,
   };
+}
+
+export async function getNormalizedWalletSnapshot(
+  address: Address,
+): Promise<NormalizedWalletSnapshot> {
+  try {
+    const transactions = await getAddressTransactions(address);
+    return fromExplorer(address, transactions);
+  } catch (error) {
+    if (error instanceof ExplorerError) {
+      return fromRpcFallback(address);
+    }
+    throw new DataUnavailableError("Unable to normalize wallet snapshot.");
+  }
 }

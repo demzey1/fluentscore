@@ -4,12 +4,23 @@ interface ScoreBreakdownProps {
   score: WalletScoreResult;
 }
 
-function ScoreBar({ value, max }: { value: number; max: number }) {
+function formatMetricValue(value: number | null) {
+  if (value === null) {
+    return "N/A";
+  }
+  return String(value);
+}
+
+function ScoreBar({ value, max }: { value: number | null; max: number }) {
+  if (value === null) {
+    return <div className="h-[3px] w-full rounded-full bg-white/8" />;
+  }
+
   const pct = Math.round((value / max) * 100);
   return (
     <div className="h-[3px] w-full overflow-hidden rounded-full bg-white/8">
       <div
-        className="h-full rounded-full transition-all"
+        className="h-full rounded-full"
         style={{
           width: `${pct}%`,
           backgroundColor: "oklch(0.65 0.14 165)",
@@ -20,16 +31,25 @@ function ScoreBar({ value, max }: { value: number; max: number }) {
 }
 
 function getDataStateMessage(score: WalletScoreResult) {
-  if (score.dataState === "explorer_unavailable") {
-    return "Fluent explorer is currently unavailable. Results may be incomplete.";
+  if (score.dataState === "data_unavailable") {
+    return {
+      tone: "warning" as const,
+      text: "Fluent data sources are currently unavailable.",
+    };
+  }
+
+  if (score.dataState === "partial_data") {
+    return {
+      tone: "warning" as const,
+      text: "Partial wallet data only. Score computation is unavailable until explorer data recovers.",
+    };
   }
 
   if (score.dataState === "no_fluent_activity") {
-    return "No Fluent on-chain activity was found for this address yet.";
-  }
-
-  if (score.dataState === "testnet_sparse") {
-    return "Sparse Testnet activity detected. This can happen with fresh or reset environments.";
+    return {
+      tone: "neutral" as const,
+      text: "No Fluent Testnet transactions were found for this address yet.",
+    };
   }
 
   return null;
@@ -45,12 +65,12 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
       <div className="border-b border-white/8 pb-6">
         <div className="flex items-end gap-4">
           <span
-            className="text-6xl leading-none font-semibold tabular-nums"
+            className="text-5xl leading-none font-semibold tabular-nums sm:text-6xl"
             style={{ color: "oklch(0.65 0.14 165)" }}
           >
-            {score.totalScore}
+            {score.totalScore === null ? "--" : score.totalScore}
           </span>
-          <span className="text-muted-foreground mb-1.5 font-mono text-sm">/ 100</span>
+          <span className="text-muted-foreground mb-1.5 font-mono text-sm">/ 85</span>
         </div>
         <p className="text-muted-foreground font-mono text-xs">
           computed{" "}
@@ -75,8 +95,20 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
       </div>
 
       {dataStateMessage ? (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="text-xs text-amber-200">{dataStateMessage}</p>
+        <div
+          className={`rounded-md border px-4 py-3 ${
+            dataStateMessage.tone === "warning"
+              ? "border-amber-500/30 bg-amber-500/10"
+              : "border-white/12 bg-card"
+          }`}
+        >
+          <p
+            className={`text-xs ${
+              dataStateMessage.tone === "warning" ? "text-amber-200" : "text-muted-foreground"
+            }`}
+          >
+            {dataStateMessage.text}
+          </p>
         </div>
       ) : null}
 
@@ -84,7 +116,7 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
         <h2 className="text-muted-foreground mb-4 font-mono text-xs tracking-widest uppercase">
           Wallet metrics
         </h2>
-        <div className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-white/8">
+        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-white/8 sm:grid-cols-3">
           {[
             { label: "Transactions", value: score.metrics.transactionCount },
             { label: "Unique contracts", value: score.metrics.uniqueContracts },
@@ -92,7 +124,7 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
           ].map((metric) => (
             <div key={metric.label} className="bg-card flex flex-col gap-1 px-5 py-4">
               <span className="text-foreground font-mono text-xl font-medium tabular-nums">
-                {metric.value}
+                {formatMetricValue(metric.value)}
               </span>
               <span className="text-muted-foreground text-xs">{metric.label}</span>
             </div>
@@ -131,8 +163,7 @@ export function ScoreBreakdown({ score }: ScoreBreakdownProps) {
       </div>
 
       <p className="text-muted-foreground text-xs">
-        Data sourced from Fluent Testnet RPC and Fluentscan indexing. Score reflects
-        on-chain activity only - no off-chain signals are included.
+        Source: Fluent Testnet RPC + Fluentscan API. Scope: on-chain activity only.
       </p>
     </div>
   );

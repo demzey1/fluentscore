@@ -1,9 +1,9 @@
 import type { Address } from "viem";
 
 export interface ScoreBreakdown {
-  activity: number;
-  diversity: number;
-  consistency: number;
+  activity: number | null;
+  diversity: number | null;
+  consistency: number | null;
 }
 
 export type ScoreSummaryLabel =
@@ -11,19 +11,24 @@ export type ScoreSummaryLabel =
   | "Early participant"
   | "Consistent user"
   | "Low activity"
-  | "No Fluent activity";
+  | "No Fluent activity"
+  | "Data unavailable";
 
 export type WalletDataState =
   | "ok"
   | "no_fluent_activity"
-  | "explorer_unavailable"
-  | "testnet_sparse";
+  | "partial_data"
+  | "data_unavailable";
 
 export interface WalletScoreResult {
   address: Address;
   chainId: number;
-  totalScore: number;
-  breakdown: ScoreBreakdown;
+  totalScore: number | null;
+  breakdown: {
+    activity: number | null;
+    diversity: number | null;
+    consistency: number | null;
+  };
   summaryLabel: ScoreSummaryLabel;
   reasons: string[];
   queriedAt: string;
@@ -34,11 +39,11 @@ export interface WalletScoreResult {
     warnings: string[];
   };
   metrics: {
-    transactionCount: number;
-    uniqueContracts: number;
-    activeDays: number;
-    nativeBalanceWei: string;
-    nativeBalanceEth: string;
+    transactionCount: number | null;
+    uniqueContracts: number | null;
+    activeDays: number | null;
   };
+  firstTxTimestamp: string | null;
+  lastTxTimestamp: string | null;
   calculatedAt: string;
 }

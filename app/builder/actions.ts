@@ -1,102 +1,73 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { requireBuilderSession } from "@/lib/auth/builder-session";
-import {
-  createRuleSet,
-  deleteRuleSet,
-  parseRuleConditionsForInput,
-  updateRuleSet,
-} from "@/lib/db/rules";
-import { mutableRuleSetInputSchema } from "@/lib/rules/schema";
+
+const thresholdFormSchema = z.object({
+  name: z.string().trim().min(2).max(80).optional(),
+  description: z.string().trim().max(300).optional(),
+  minTransactionCount: z.coerce.number().int().min(0),
+  minUniqueContracts: z.coerce.number().int().min(0),
+  minActiveDays: z.coerce.number().int().min(0),
+  minTotalScore: z.coerce.number().int().min(0),
+});
+
+function resolveOrigin(host: string | null, forwardedProto: string | null) {
+  if (!host) {
+    return "http://localhost:3000";
+  }
+  const protocol = forwardedProto ?? (host.includes("localhost") ? "http" : "https");
+  return `${protocol}://${host}`;
+}
 
 function getTextField(formData: FormData, field: string) {
   return String(formData.get(field) ?? "").trim();
 }
 
-function parseRuleSetInput(formData: FormData, includeId: boolean) {
-  const rawInput = {
-    id: includeId ? getTextField(formData, "id") : undefined,
-    name: getTextField(formData, "name"),
-    description: getTextField(formData, "description"),
-    conditionsJson: getTextField(formData, "conditionsJson"),
-    isActive: formData.get("isActive") === "on",
-  };
-
-  return mutableRuleSetInputSchema.extend({
-    id: includeId ? z.string().cuid() : z.string().cuid().optional(),
-  }).parse(rawInput);
+function toErrorUrl(message: string) {
+  return `/builder?status=error&message=${encodeURIComponent(message)}`;
 }
 
-function toRedirectError(message: string) {
-  const params = new URLSearchParams({
-    status: "error",
-    message,
+export async function saveActiveRuleSetAction(formData: FormData) {
+  await requireBuilderSession();
+
+  const parsed = thresholdFormSchema.safeParse({
+    name: getTextField(formData, "name") || undefined,
+    description: getTextField(formData, "description") || undefined,
+    minTransactionCount: getTextField(formData, "minTransactionCount"),
+    minUniqueContracts: getTextField(formData, "minUniqueContracts"),
+    minActiveDays: getTextField(formData, "minActiveDays"),
+    minTotalScore: getTextField(formData, "minTotalScore"),
   });
-  return `/builder?${params.toString()}`;
-}
 
-export async function createRuleSetAction(formData: FormData) {
-  await requireBuilderSession();
+  if (!parsed.success) {
+    redirect(toErrorUrl("Invalid threshold values."));
+  }
 
-  try {
-    const input = parseRuleSetInput(formData, false);
-    const conditions = parseRuleConditionsForInput(input.conditionsJson);
+  const requestHeaders = await headers();
+  const origin = resolveOrigin(
+    requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host"),
+    requestHeaders.get("x-forwarded-proto"),
+  );
 
-    await createRuleSet({
-      name: input.name,
-      description: input.description || undefined,
-      conditions,
-      isActive: input.isActive,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to create rule set.";
-    redirect(toRedirectError(message));
+  const response = await fetch(new URL("/api/rules", origin), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: requestHeaders.get("cookie") ?? "",
+    },
+    cache: "no-store",
+    body: JSON.stringify(parsed.data),
+  });
+
+  if (!response.ok) {
+    redirect(toErrorUrl("Unable to save active rule set."));
   }
 
   revalidatePath("/builder");
-  redirect("/builder?status=success&message=Rule+set+created");
-}
-
-export async function updateRuleSetAction(formData: FormData) {
-  await requireBuilderSession();
-
-  try {
-    const input = parseRuleSetInput(formData, true);
-    const conditions = parseRuleConditionsForInput(input.conditionsJson);
-    await updateRuleSet({
-      id: input.id!,
-      name: input.name,
-      description: input.description || undefined,
-      conditions,
-      isActive: input.isActive,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to update rule set.";
-    redirect(toRedirectError(message));
-  }
-
-  revalidatePath("/builder");
-  redirect("/builder?status=success&message=Rule+set+updated");
-}
-
-export async function deleteRuleSetAction(formData: FormData) {
-  await requireBuilderSession();
-
-  try {
-    const ruleSetId = z.string().cuid().parse(getTextField(formData, "id"));
-    await deleteRuleSet(ruleSetId);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to delete rule set.";
-    redirect(toRedirectError(message));
-  }
-
-  revalidatePath("/builder");
-  redirect("/builder?status=success&message=Rule+set+deleted");
+  redirect("/builder?status=success&message=Active+rule+set+saved");
 }

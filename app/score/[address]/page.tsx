@@ -36,16 +36,15 @@ export default async function ScorePage({ params }: ScorePageProps) {
     return (
       <div className="flex max-w-xl flex-col gap-6">
         <div className="flex flex-col gap-1">
-          <h1 className="text-foreground text-lg font-semibold">Explorer unavailable</h1>
+          <h1 className="text-foreground text-lg font-semibold">Data unavailable</h1>
           <p className="text-muted-foreground text-sm">
-            Fluent data sources are currently unavailable. Try again shortly.
+            Fluent data could not be retrieved for this request. Please try again shortly.
           </p>
         </div>
         <WalletLookupForm />
       </div>
     );
   }
-
   return (
     <div className="flex flex-col gap-8">
       <div className="border-b border-white/8 pb-6">

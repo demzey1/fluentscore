@@ -1,204 +1,123 @@
-import { revalidateTag, unstable_cache } from "next/cache";
-import { type Address, getAddress } from "viem";
+import { revalidateTag } from "next/cache";
+import { getAddress } from "viem";
 import { z } from "zod";
 
 import {
   getRecentWalletSnapshotScore,
+  hydrateWalletScoreResultFromRecord,
   persistWalletSnapshotAndScore,
 } from "@/lib/db/wallet-snapshots";
+import { DataUnavailableError, InvalidAddressError } from "@/lib/errors";
 import { DEFAULT_FLUENT_CONFIG } from "@/lib/env";
-import { normalizeFluentWalletSnapshot } from "@/lib/fluent/wallet";
+import { getNormalizedWalletSnapshot } from "@/lib/fluent/wallet";
 import { computeFluentWalletScore } from "@/lib/scoring/compute";
-import type { ScoreSummaryLabel, WalletScoreResult } from "@/lib/scoring/types";
+import type { WalletScoreResult } from "@/lib/scoring/types";
 
 const addressSchema = z.string().trim().min(1);
-const summaryLabelSchema = z.enum([
-  "Strong activity",
-  "Early participant",
-  "Consistent user",
-  "Low activity",
-  "No Fluent activity",
-]);
-const dataStateSchema = z.enum([
-  "ok",
-  "no_fluent_activity",
-  "explorer_unavailable",
-  "testnet_sparse",
-]);
-
-const reasonsJsonSchema = z
-  .object({
-    chainId: z.number().int().optional(),
-    calculatedAt: z.string().optional(),
-    queriedAt: z.string().optional(),
-    dataState: dataStateSchema.optional(),
-    summaryLabel: summaryLabelSchema.optional(),
-    reasons: z.array(z.string()).optional(),
-    sourceHealth: z
-      .object({
-        explorer: z.enum(["ok", "degraded"]),
-        rpc: z.enum(["ok", "degraded"]),
-        warnings: z.array(z.string()),
-      })
-      .optional(),
-  })
-  .passthrough();
-
-const rawPayloadSchema = z
-  .object({
-    chainId: z.number().int().optional(),
-    rpc: z
-      .object({
-        nativeBalanceWei: z.string().regex(/^\d+$/),
-        nativeBalanceEth: z.string(),
-      })
-      .optional(),
-  })
-  .passthrough();
 
 export interface GetFluentWalletScoreOptions {
   forceRefresh?: boolean;
   maxAgeMinutes?: number;
 }
 
-function fromCachedScore(
-  address: Address,
-  cached: Awaited<ReturnType<typeof getRecentWalletSnapshotScore>>,
-) {
-  if (!cached) {
-    return null;
-  }
-
-  const parsedReasons = reasonsJsonSchema.safeParse(cached.walletScore.reasonsJson);
-  const parsedRawPayload = rawPayloadSchema.safeParse(cached.walletSnapshot.rawPayload);
-
-  const nativeBalanceWei = parsedRawPayload.success
-    ? parsedRawPayload.data.rpc?.nativeBalanceWei ?? "0"
-    : "0";
-  const nativeBalanceEth = parsedRawPayload.success
-    ? parsedRawPayload.data.rpc?.nativeBalanceEth ?? "0"
-    : "0";
-
-  const chainId =
-    parsedReasons.success && parsedReasons.data.chainId
-      ? parsedReasons.data.chainId
-      : parsedRawPayload.success && parsedRawPayload.data.chainId
-        ? parsedRawPayload.data.chainId
-        : DEFAULT_FLUENT_CONFIG.chainId;
-
-  const calculatedAt =
-    parsedReasons.success && parsedReasons.data.calculatedAt
-      ? parsedReasons.data.calculatedAt
-      : cached.walletScore.createdAt.toISOString();
-  const queriedAt =
-    parsedReasons.success && parsedReasons.data.queriedAt
-      ? parsedReasons.data.queriedAt
-      : cached.walletSnapshot.createdAt.toISOString();
-
-  const parsedStoredSummaryLabel = summaryLabelSchema.safeParse(cached.walletScore.summaryLabel);
-  const summaryLabel: ScoreSummaryLabel =
-    parsedReasons.success && parsedReasons.data.summaryLabel
-      ? parsedReasons.data.summaryLabel
-      : parsedStoredSummaryLabel.success
-        ? parsedStoredSummaryLabel.data
-        : "Low activity";
-
-  const reasons =
-    parsedReasons.success && parsedReasons.data.reasons
-      ? parsedReasons.data.reasons
-      : [`Score classified as ${summaryLabel}.`];
-  const dataState =
-    parsedReasons.success && parsedReasons.data.dataState
-      ? parsedReasons.data.dataState
-      : cached.walletSnapshot.txCount === 0
-        ? "no_fluent_activity"
-        : "ok";
-  const sourceHealth =
-    parsedReasons.success && parsedReasons.data.sourceHealth
-      ? parsedReasons.data.sourceHealth
-      : {
-          explorer: "ok" as const,
-          rpc: "ok" as const,
-          warnings: [] as string[],
-        };
-
-  const scoreResult: WalletScoreResult = {
+function buildDataUnavailableScore(address: `0x${string}`): WalletScoreResult {
+  const now = new Date().toISOString();
+  return {
     address,
-    chainId,
-    totalScore: cached.walletScore.totalScore,
-    queriedAt,
-    dataState,
-    sourceHealth,
+    chainId: DEFAULT_FLUENT_CONFIG.chainId,
+    totalScore: null,
     breakdown: {
-      activity: cached.walletScore.transactionActivityScore,
-      diversity: cached.walletScore.contractDiversityScore,
-      consistency: cached.walletScore.consistencyScore,
+      activity: null,
+      diversity: null,
+      consistency: null,
     },
-    summaryLabel,
-    reasons,
+    summaryLabel: "Data unavailable",
+    reasons: ["Fluent Testnet data sources are currently unavailable."],
+    queriedAt: now,
+    dataState: "data_unavailable",
+    sourceHealth: {
+      explorer: "degraded",
+      rpc: "degraded",
+      warnings: ["Unable to reach Fluent explorer and RPC fallback."],
+    },
     metrics: {
-      transactionCount: cached.walletSnapshot.txCount,
-      uniqueContracts: cached.walletSnapshot.uniqueContracts,
-      activeDays: cached.walletSnapshot.activeDays,
-      nativeBalanceWei,
-      nativeBalanceEth,
+      transactionCount: null,
+      uniqueContracts: null,
+      activeDays: null,
     },
-    calculatedAt,
+    firstTxTimestamp: null,
+    lastTxTimestamp: null,
+    calculatedAt: now,
   };
-
-  return scoreResult;
 }
 
-async function getWalletScoreFresh(
-  address: Address,
-  options: Required<GetFluentWalletScoreOptions>,
-) {
-  if (!options.forceRefresh) {
-    const recentSnapshot = await getRecentWalletSnapshotScore(address, options.maxAgeMinutes);
-    const cachedScore = fromCachedScore(address, recentSnapshot);
-    if (cachedScore) {
-      return cachedScore;
-    }
+function parseAddressOrThrow(inputAddress: string) {
+  const parsedAddress = addressSchema.safeParse(inputAddress);
+  if (!parsedAddress.success) {
+    throw new InvalidAddressError("Wallet address is required.");
   }
 
-  const normalized = await normalizeFluentWalletSnapshot(address);
-  const computed = computeFluentWalletScore(normalized);
+  try {
+    return getAddress(parsedAddress.data);
+  } catch {
+    throw new InvalidAddressError("Invalid EVM wallet address.");
+  }
+}
 
-  await persistWalletSnapshotAndScore(normalized, computed);
-  return computed;
+function canPersistScore(score: WalletScoreResult) {
+  return (
+    (score.dataState === "ok" || score.dataState === "no_fluent_activity") &&
+    score.totalScore !== null &&
+    score.breakdown.activity !== null &&
+    score.breakdown.diversity !== null &&
+    score.breakdown.consistency !== null &&
+    score.metrics.transactionCount !== null &&
+    score.metrics.uniqueContracts !== null &&
+    score.metrics.activeDays !== null
+  );
 }
 
 export async function getFluentWalletScore(
   inputAddress: string,
   options: GetFluentWalletScoreOptions = {},
 ) {
-  const rawAddress = addressSchema.parse(inputAddress);
-  const address = getAddress(rawAddress);
-
+  const address = parseAddressOrThrow(inputAddress);
   const resolvedOptions: Required<GetFluentWalletScoreOptions> = {
     forceRefresh: options.forceRefresh ?? false,
     maxAgeMinutes: options.maxAgeMinutes ?? 5,
   };
 
-  if (resolvedOptions.forceRefresh) {
-    return getWalletScoreFresh(address, resolvedOptions);
+  if (!resolvedOptions.forceRefresh) {
+    const cached = await getRecentWalletSnapshotScore(address, resolvedOptions.maxAgeMinutes);
+    if (cached) {
+      return hydrateWalletScoreResultFromRecord({
+        address,
+        walletSnapshot: cached.walletSnapshot,
+        walletScore: cached.walletScore,
+      });
+    }
   }
 
-  const cachedQuery = unstable_cache(
-    () => getWalletScoreFresh(address, resolvedOptions),
-    [`wallet-score:${address.toLowerCase()}:maxAge:${resolvedOptions.maxAgeMinutes}`],
-    {
-      revalidate: 120,
-      tags: [`wallet-score:${address.toLowerCase()}`],
-    },
-  );
+  let normalizedSnapshot;
+  try {
+    normalizedSnapshot = await getNormalizedWalletSnapshot(address);
+  } catch (error) {
+    if (error instanceof DataUnavailableError) {
+      return buildDataUnavailableScore(address);
+    }
+    throw error;
+  }
 
-  return cachedQuery();
+  const score = computeFluentWalletScore(normalizedSnapshot);
+  if (canPersistScore(score)) {
+    await persistWalletSnapshotAndScore(normalizedSnapshot, score);
+  }
+
+  return score;
 }
 
 export async function refreshWalletSnapshotOnDemand(inputAddress: string) {
-  const rawAddress = addressSchema.parse(inputAddress);
-  const address = getAddress(rawAddress);
+  const address = parseAddressOrThrow(inputAddress);
   const refreshedScore = await getFluentWalletScore(address, {
     forceRefresh: true,
   });

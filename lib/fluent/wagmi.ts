@@ -1,12 +1,9 @@
 import { createConfig, createStorage, fallback, http, webSocket } from "wagmi";
 
-import { DEFAULT_FLUENT_CONFIG } from "@/lib/env";
 import { fluentTestnetChain } from "@/lib/fluent/chain";
 
-const fluentRpcUrl =
-  process.env.NEXT_PUBLIC_FLUENT_RPC_URL ?? DEFAULT_FLUENT_CONFIG.rpcUrl;
-const fluentWsRpcUrl =
-  process.env.NEXT_PUBLIC_FLUENT_WS_RPC_URL ?? DEFAULT_FLUENT_CONFIG.wsRpcUrl;
+const FLUENT_RPC_URL = "https://rpc.testnet.fluent.xyz/";
+const FLUENT_WS_RPC_URL = "wss://rpc.testnet.fluent.xyz/ws";
 
 export const fluentWagmiConfig = createConfig({
   chains: [fluentTestnetChain],
@@ -17,6 +14,6 @@ export const fluentWagmiConfig = createConfig({
       typeof window !== "undefined" ? window.localStorage : undefined,
   }),
   transports: {
-    [fluentTestnetChain.id]: fallback([webSocket(fluentWsRpcUrl), http(fluentRpcUrl)]),
+    [fluentTestnetChain.id]: fallback([webSocket(FLUENT_WS_RPC_URL), http(FLUENT_RPC_URL)]),
   },
 });

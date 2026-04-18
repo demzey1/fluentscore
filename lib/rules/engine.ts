@@ -49,8 +49,21 @@ function evaluateCondition(
 ): EvaluatedCondition {
   const { score, firstTransactionAt, evaluatedAt } = context;
 
+  function unavailableMetricExplanation(label: string) {
+    return `${label} is unavailable for this wallet snapshot.`;
+  }
+
   if (condition.type === "MIN_TRANSACTION_COUNT") {
     const value = score.metrics.transactionCount;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Transaction count"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -63,6 +76,15 @@ function evaluateCondition(
 
   if (condition.type === "MIN_UNIQUE_CONTRACTS") {
     const value = score.metrics.uniqueContracts;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Unique contracts"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -75,6 +97,15 @@ function evaluateCondition(
 
   if (condition.type === "MIN_ACTIVE_DAYS") {
     const value = score.metrics.activeDays;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Active days"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -110,6 +141,15 @@ function evaluateCondition(
 
   if (condition.type === "MIN_TRANSACTION_ACTIVITY_SCORE") {
     const value = score.breakdown.activity;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Transaction activity score"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -122,6 +162,15 @@ function evaluateCondition(
 
   if (condition.type === "MIN_CONTRACT_DIVERSITY_SCORE") {
     const value = score.breakdown.diversity;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Contract diversity score"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -134,6 +183,15 @@ function evaluateCondition(
 
   if (condition.type === "MIN_CONSISTENCY_SCORE") {
     const value = score.breakdown.consistency;
+    if (value === null) {
+      return {
+        conditionId: condition.id,
+        type: condition.type,
+        threshold: condition.threshold,
+        passed: false,
+        explanation: unavailableMetricExplanation("Consistency score"),
+      };
+    }
     const passed = value >= condition.threshold;
     return {
       conditionId: condition.id,
@@ -145,6 +203,15 @@ function evaluateCondition(
   }
 
   const totalScore = score.totalScore;
+  if (totalScore === null) {
+    return {
+      conditionId: condition.id,
+      type: condition.type,
+      threshold: condition.threshold,
+      passed: false,
+      explanation: unavailableMetricExplanation("Total score"),
+    };
+  }
   const passed = totalScore >= condition.threshold;
   return {
     conditionId: condition.id,

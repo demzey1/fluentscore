@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { getAddress, isAddress } from "viem";
 import { z } from "zod";
 
-import { hasBuilderSession, unlockBuilderSession } from "@/lib/auth/builder-session";
+import { hasBuilderSession } from "@/lib/auth/builder-session";
 import {
   createRuleSet,
   deleteRuleSet,
@@ -23,10 +23,6 @@ const createRuleSetBodySchema = z.object({
 });
 
 const updateRuleSetBodySchema = createRuleSetBodySchema;
-
-const unlockBodySchema = z.object({
-  passcode: z.string().trim().min(1).max(64),
-});
 
 const evaluateRuleBodySchema = z.object({
   ruleSetId: ruleSetIdSchema,
@@ -121,24 +117,6 @@ async function requireBuilderSessionForApi() {
       "Builder Mode is locked for this browser session.",
     );
   }
-}
-
-export async function parseUnlockRequestBody(request: Request) {
-  return parseRequestBody(request, unlockBodySchema, "/api/builder/unlock");
-}
-
-export async function unlockBuilderModeForSession(passcode: string) {
-  // Temporary private gate only. This is not production authentication.
-  const unlocked = await unlockBuilderSession(passcode);
-  if (!unlocked) {
-    throw new BuilderApiError(401, "INVALID_PASSCODE", "Builder passcode is incorrect.");
-  }
-
-  return {
-    unlocked: true as const,
-    scope: "browser_session" as const,
-    note: "Temporary private access gate. Not production authentication.",
-  };
 }
 
 export async function getRuleSetListPayload() {

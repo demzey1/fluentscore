@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
+import { getAddress, isAddress } from "viem";
 
-import {
-  buildErrorPayload,
-  getWalletSnapshotPayload,
-  parseAddressParam,
-  parseScoreQuery,
-} from "@/lib/api/fluentscore-phase1";
+import { jsonError } from "@/lib/api/http-errors";
+import { DataUnavailableError } from "@/lib/errors";
+import { getNormalizedWalletSnapshot } from "@/lib/fluent/wallet";
 
 interface RouteContext {
   params: Promise<{
@@ -13,27 +11,20 @@ interface RouteContext {
   }>;
 }
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function GET(_: Request, { params }: RouteContext) {
+  const { address } = await params;
+
+  if (!isAddress(address)) {
+    return jsonError(400, "INVALID_ADDRESS", "Invalid EVM wallet address.");
+  }
+
   try {
-    const { address } = await params;
-    const parsedAddress = parseAddressParam(address);
-    const requestUrl = new URL(request.url);
-    const query = parseScoreQuery(requestUrl.searchParams);
-
-    const walletPayload = await getWalletSnapshotPayload({
-      address: parsedAddress,
-      maxAgeMinutes: query.maxAgeMinutes,
-    });
-
-    return NextResponse.json(
-      {
-        data: walletPayload,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 200 },
-    );
+    const snapshot = await getNormalizedWalletSnapshot(getAddress(address));
+    return NextResponse.json(snapshot, { status: 200 });
   } catch (error) {
-    const shapedError = buildErrorPayload(error);
-    return NextResponse.json(shapedError.body, { status: shapedError.status });
+    if (error instanceof DataUnavailableError) {
+      return jsonError(503, error.code, error.message);
+    }
+    return jsonError(500, "INTERNAL_ERROR", "Unable to fetch wallet snapshot.");
   }
 }

@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
+import { getAddress, isAddress } from "viem";
 
-import {
-  buildErrorPayload,
-  executeScoreFlow,
-  parseAddressParam,
-  parseScoreQuery,
-} from "@/lib/api/fluentscore-phase1";
+import { jsonError } from "@/lib/api/http-errors";
+import { InvalidAddressError } from "@/lib/errors";
+import { getFluentWalletScore } from "@/lib/scoring/wallet-score";
 
 interface RouteContext {
   params: Promise<{
@@ -13,28 +11,20 @@ interface RouteContext {
   }>;
 }
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function GET(_: Request, { params }: RouteContext) {
+  const { address } = await params;
+
+  if (!isAddress(address)) {
+    return jsonError(400, "INVALID_ADDRESS", "Invalid EVM wallet address.");
+  }
+
   try {
-    const { address } = await params;
-    const parsedAddress = parseAddressParam(address);
-    const requestUrl = new URL(request.url);
-    const query = parseScoreQuery(requestUrl.searchParams);
-
-    const scorePayload = await executeScoreFlow({
-      address: parsedAddress,
-      refresh: query.refresh,
-      maxAgeMinutes: query.maxAgeMinutes,
-    });
-
-    return NextResponse.json(
-      {
-        data: scorePayload,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 200 },
-    );
+    const score = await getFluentWalletScore(getAddress(address));
+    return NextResponse.json(score, { status: 200 });
   } catch (error) {
-    const shapedError = buildErrorPayload(error);
-    return NextResponse.json(shapedError.body, { status: shapedError.status });
+    if (error instanceof InvalidAddressError) {
+      return jsonError(400, error.code, error.message);
+    }
+    return jsonError(500, "INTERNAL_ERROR", "Unable to fetch wallet score.");
   }
 }
